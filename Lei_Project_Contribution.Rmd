@@ -1,0 +1,342 @@
+---
+title: "Lei_Project_Contribution"
+output: pdf_document
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Summary
+Bagging and Random Forest perform better than others. The error rates of validation are 0.4% and 0.9%, respectively.
+
+
+## Preprocessing Data
+
+I used the varialbes listed in the project report. The variables are listed as follows.
+```{r}
+# Load and preprocess data
+raw_train_data = read.csv("TrainingKickstarter.csv")
+raw_val_data = read.csv("validationKickstarter.csv")
+# dim(raw_train_data)
+# dim(raw_val_data)
+da_train = raw_train_data[, c(21, 6, 8, 9, 5, 3, 20, 14, 13, 11, 19, 18, 16, 15)]
+da_val = raw_val_data[, c(21, 6, 8, 9, 5, 3, 20, 14, 13, 11, 19, 18, 16, 15)]
+names(da_train)
+```
+
+
+## Tree Method
+
+According to the results of trees, pruned tree and unpruned tree are not significantly different.
+
+#### Unpruned tree
+```{r}
+library(tree)
+# try with all the attributes
+tree_fit = tree(state~., data=da_train)
+# plot unpruned tree
+plot(tree_fit)
+text(tree_fit, pretty=0)
+```
+Summary of unpruned tree.
+```{r}
+summary(tree_fit)
+```
+
+Confusion matrix of unpruned tree. The error rate is 4.2%.
+```{r}
+pred_tree_unpruned = predict(tree_fit, newdata=da_val, type="class")
+table(pred_tree_unpruned, da_val[, 5])
+1 - mean(pred_tree_unpruned == da_val[, 5])
+```
+
+#### Pruned tree
+
+```{r}
+# use cross-validatin to choose how to prune tree
+set.seed(0)
+cv_tree = cv.tree(tree_fit, FUN=prune.misclass)
+cv_tree
+```
+
+Plot relation of size and dev.
+```{r}
+# plot size and dev relation
+plot(cv_tree$size, cv_tree$dev, type="b", xlab="Tree Size", ylab="Deviance")
+```
+
+```{r}
+best_tree = prune.misclass(tree_fit, best=10)
+summary(best_tree)
+```
+
+Plot the pruned tree.
+```{r}
+# plot best tree
+plot(best_tree)
+text(best_tree, pretty=0)
+```
+
+Confusion matrix of pruned tree. The error rate of pruned tree is 4.2%.
+```{r}
+# test
+pred_tree = predict(best_tree, newdata=da_val, type="class")
+table(pred_tree, da_val[, 5])
+1 - mean(pred_tree == da_val[, 5])
+```
+
+
+## Bagging method (tree classifier)
+Bagging detail.
+```{r}
+library(randomForest)
+set.seed(0)
+bag_fit = randomForest(state~., data=da_train, mtry=13, importance=TRUE, ntree=20)
+bag_fit
+```
+
+Plot importance of each variable.
+```{r}
+# # importance of each variable
+# importance(bag_fit)
+# plot importance
+varImpPlot(bag_fit)
+```
+
+Confusion matrix of bagging. The error rate of bagging is 0.4%.
+```{r}
+# test
+pred_bag = predict(bag_fit, newdata=da_val)
+table(pred_bag, da_val[, 5])
+1 - mean(pred_bag == da_val[, 5])
+```
+
+
+## Random Forest
+Detail of random forest with 20 trees. Each of the tree uses 3 predictors.
+```{r}
+set.seed(0)
+rf_fit = randomForest(state~., data=da_train, mtry=3, importance=TRUE, ntree=20)
+rf_fit
+```
+
+Plot the importance of each variable.
+```{r}
+# # importance of each variable
+# importance(rf_fit)
+# plot importance
+varImpPlot(rf_fit)
+```
+
+Confusion matrix of random forest. The error rate of random forest is 0.9%.
+```{r}
+pred_rf = predict(rf_fit, newdata=da_val)
+table(pred_rf, da_val[, 5])
+1- mean(pred_rf == da_val[, 5])
+```
+
+
+## Encode "main_category" using one-hot encoding
+
+```{r}
+# One-hot encode "main_category"
+da_oh_train = da_train
+da_oh_val = da_val
+for(cat in unique(da_oh_train$main_category)){
+        da_oh_train[paste("cat", cat, sep=".")] = ifelse(da_oh_train$main_category == cat, 1, 0)
+        da_oh_val[paste("cat", cat, sep=".")] = ifelse(da_oh_val$main_category == cat, 1, 0)
+}
+da_oh_train = da_oh_train[, -6]
+da_oh_val = da_oh_val[, -6]
+names(da_oh_train)
+```
+
+
+## Create 10 folds for cross validation
+```{r}
+# 10-fold cross validaiton
+folds = cut(seq(1:nrow(da_train)), breaks=10, labels=FALSE)
+```
+
+
+## Logistic Regression
+
+Use 10-fold cross validation to select threshold. Row names are the thresholds, which are from 0.1 to 0.9.
+```{r warning=FALSE}
+# Use 10-fold cross validation to select threshold
+# three value in log_cv[i, j] are accuracy, accuracy_successful, accuracy_other
+log_cv = array(NA, c(10, 9, 3))
+for(i in 1:10){
+        testIndexes = which(folds==i, arr.ind=TRUE)
+        testData = da_oh_train[testIndexes, ]
+        trainData = da_oh_train[-testIndexes, ]
+        log_fit = glm(state~., family=binomial, data=trainData)
+        prob_log = predict(log_fit, newdata=testData, type="response")
+        for(j in 1:9){
+                pred_log = ifelse(prob_log>=j/10, "successful", "other")
+                tab = table(pred_log, testData[, 5])
+                log_cv[i, j, 1] = mean(pred_log == testData[, 5])
+                log_cv[i, j, 2] = tab[2, 2]/(tab[2, 2] + tab[1, 2])
+                log_cv[i, j, 3] = tab[1, 1]/(tab[1, 1] + tab[2, 1])
+        }
+        # pred_log = ifelse(prob_log>=0.5, "successful", "other")
+        # tab = table(pred_log, testData[, 5])
+        # log_cv[[i]] = tab
+}
+log_cv_1 = matrix(0, nrow=9, ncol=3, dimnames=list(seq(0.1, 0.9, 0.1), c("Accuracy", "Acc_success", "Acc_other")))
+for(i in 1:10){
+        for(j in 1:9){
+                log_cv_1[j, ] = log_cv_1[j, ] + log_cv[i, j, ]
+        }
+}
+log_cv_1 = log_cv_1/10
+log_cv_1
+```
+
+Plot the accuracies to select threshold. How to select threshold using these plots?
+```{r}
+# How to decide threshold according these three plots???
+par(mfrow=c(1, 3))
+plot(log_cv_1[, 1], type="b", xlab="threshold * 10", ylab="Accuracy")
+plot(log_cv_1[, 2], type="b", xlab="threshold * 10", ylab="Accuracy of Success")
+plot(log_cv_1[, 3], type="b", xlab="threshold * 10", ylab="Accuracy of Other")
+par(mfrow=c(1,1))
+```
+
+I tried 0.4 as threshold to train and predict. Detail of the model is as follow.
+```{r warning=FALSE}
+# Use selected threshold to train and test model
+# For example, threshold=0.4
+log_fit_best = glm(state~., family=binomial, data=da_oh_train)
+summary(log_fit)
+```
+
+Confusion matrix of logistic regression. The error rate is 3.8%.
+```{r warning=FALSE}
+prob_log = predict(log_fit, newdata=da_oh_val, type="response")
+pred_log = ifelse(prob_log>=0.4, "successful", "others")
+table(pred_log, da_oh_val[, 5])
+1 - mean(pred_log == da_oh_val[, 5])
+```
+
+
+## PCA
+Detail of PCA.
+```{r}
+pca_train = prcomp(da_oh_train[, -5], center=TRUE, scale=TRUE)
+summary(pca_train)
+```
+Plots of PVE.
+```{r}
+# plot PVE curve
+par(mfrow=c(2, 1))
+plot(summary(pca_train)$importance[2, ], type="o", ylab="PVE", xlab="Principal Component", col =" blue ")
+plot(summary(pca_train)$importance[3, ], type="o", ylab=" Cumulative PVE", xlab="Principal Component", col =" blue ")
+```
+
+Plot data with 2 components of PCA.
+```{r}
+# plot data after PCA
+par(mfrow=c(1, 1))
+plot(pca_train$x[, 1:2], col=as.numeric(da_oh_train[, 5])+1)
+```
+
+According to plots, select 5 components.
+```{r}
+# According PVE plot, select 5 components
+da_pca_train = data.frame(pca_train$x[, 1:5], da_oh_train[, 5])
+names(da_pca_train)[6] = "state"
+da_pca_val = data.frame(predict(pca_train, da_oh_val[, -5])[, 1:5], da_oh_val[, 5])
+names(da_pca_val)[6] = "state"
+```
+
+
+## LDA and QDA
+#### LDA
+Confusion matrix of LDA.
+```{r}
+# LDA and QDA ???How to deal with main_category??? How to encode it???One-hot encoding produces collinear problem.
+# Try to use PCA to solve collinear problem
+library(MASS)
+lda_fit = lda(state~., data=da_pca_train)
+pred_lda = predict(lda_fit, da_pca_val)
+table(pred_lda$class, da_pca_val[, 6])
+```
+
+#### QDA
+Confusion matrix of QDA.
+```{r}
+qda_fit = qda(state~., data=da_pca_train)
+pred_qda = predict(qda_fit, da_pca_val)
+table(pred_qda$class, da_pca_val[, 6])
+```
+
+
+## Scale data by Hand ( (X - mean(X))/sd(X) )
+```{r}
+# scale data by hand
+my_scale = function(col){
+        col = (col - mean(col))/sd(col)
+}
+da_oh_scaled_train = apply(da_oh_train[, -5], 2, my_scale)
+da_oh_scaled_train = data.frame(da_oh_scaled_train, da_oh_train$state)
+names(da_oh_scaled_train)[28] = "state"
+da_oh_scaled_val = da_oh_val[, -5]
+for(i in 1:ncol(da_oh_scaled_val)){
+        train_data = da_oh_train[, -5]
+        da_oh_scaled_val[, i] = (da_oh_scaled_val[, i] - mean(train_data[, i]))/sd(train_data[, i])
+}
+da_oh_scaled_val = data.frame(da_oh_scaled_val, da_oh_val$state)
+names(da_oh_scaled_val)[28] = "state"
+```
+
+
+## KNN
+### KNN with cross validation runs too long
+K = 1 results in 37.21% error rate, whicl K = 2 results in 37.67% error rate. Code is using k=2 as example.
+```{r}
+library(class)
+# test if knn works
+# This process takes 5 minutes.
+pred_test_knn = knn(da_oh_scaled_train[, -28], da_oh_scaled_val[, -28], da_oh_scaled_train$state, k=2)
+1 - mean(pred_test_knn == da_oh_scaled_val$state)
+# k=1 results in 37.21% error rate.
+# k=2 results in 37.59% error rate.
+```
+
+This part of code is using 10-fold cross validation to select k, which is from 1 to 10. Since it takes too long, I have never finished one running.
+```{r}
+# # KNN with 10-fold cross validation
+# # this takes a longer time, haven't finished one running.
+# # 10 columns: k=1:10.
+# # 10 rows: 10-fold cross validation
+# knn_cv = matrix(0, 10, 10)
+# for(j in 1:10){
+#         for(i in 1:10){
+#                 testIndexes = which(folds==i, arr.ind=TRUE)
+#                 testData = da_oh_scaled_train[testIndexes, -28]
+#                 trainData = da_oh_scaled_train[-testIndexes, -28]
+#                 pred_knn = knn(trainData, testData, da_oh_scaled_train$state[-testIndexes], k=j)
+#                 knn_cv[i, j] = 1 - mean(pred_knn == da_oh_scaled_train$state[testIndexes])
+#         }
+# }
+# knn_cv = apply(knn_cv, 2, mean)
+# knn_cv
+```
+
+
+## SVM with radial kernel
+### SVM with cross validation runs too long
+tune() function is doing 10-fold cross validation. Since it takes too long, I have never finished one running.
+```{r}
+# # SVM and tune with radial kernel using scaled data
+# # SVM and tune are too slow, havn't finished one running.
+# library(e1071)
+# set.seed(0)
+# tune_out = tune(svm, state~., data=da_oh_scaled_train, kernel="radial")
+#                 #,ranges=list(cost=c(0.001, 0.01, 0.1), gamma=c(0.5,1,2)))
+# summary(tune_out)
+# best_svm = tune_out$best.model
+# pred_svm = predict(best_svm, da_oh_scaled_val)
+# table(pred_svm, da_oh_scaled_val$state)
+```
